@@ -1,10 +1,12 @@
+
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20128%20128'%3E%3Crect%20width='128'%20height='128'%20rx='22'%20fill='%231e88e5'/%3E%3Ctext%20x='50%25'%20y='58%25'%20dominant-baseline='middle'%20text-anchor='middle'%20font-family='Arial'%20font-size='56'%20fill='white'%3EOCR%3C/text%3E%3C/svg%3E">
-  <title>Image2txt</title>
+
+  <title>IMG 2 TXT</title>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; font-family: tahoma; }
@@ -186,7 +188,7 @@
 </head>
 <body>
 <div class="container">
-  <h1>IMG 2 TXT</h1>
+  <h1>IMG2TXT</h1>
   <div class="toolbar">
     <label class="file" title="انتخاب فایل تصویر">
       انتخاب تصویر
@@ -720,18 +722,33 @@
     statusEl.innerText = "در حال OCR...";
     try {
       const lang = langSel.value;
-      if (lang === "fas+eng") {
-        const rotBlob = await makeRotatedFullBlob();
-        const resFa = await ocrBlob(rotBlob, "fas");
-        const resEn = await ocrBlob(rotBlob, "eng");
-        const faText = (resFa?.data?.text || "").replace(/\r\n/g, "\n");
-        const enText = (resEn?.data?.text || "").replace(/\r\n/g, "\n");
-        output.value = mergeTexts(faText, enText);
-        const buildRes = resFa?.data?.lines ? resFa : resEn;
-        const built = buildLineBoxesFromTesseractResult(buildRes);
-        lineBoxes = built.boxes;
-        lineTextsById = built.textsById;
-      } else {
+
+if (lang === "fas+eng") {
+  const rotBlob = await makeRotatedFullBlob();
+
+  // مجزا OCR
+  const [resFa, resEn] = await Promise.all([
+    ocrBlob(rotBlob, "fas"),
+    ocrBlob(rotBlob, "eng")
+  ]);
+
+  const faText = (resFa?.data?.text || "").replace(/\r\n/g, "\n").trimEnd();
+  const enText = (resEn?.data?.text || "").replace(/\r\n/g, "\n").trimEnd();
+
+  // نمایش جدا با برچسب
+  const parts = [];
+  parts.push("[FA]\n" + (faText || ""));
+  parts.push("\n[EN]\n" + (enText || ""));
+  output.value = parts.join("");
+
+  // برای Line OCR: ترجیح با زبانی که lines بیشتری/معتبرتری داده
+  const faHasLines = !!resFa?.data?.lines?.length;
+  const enHasLines = !!resEn?.data?.lines?.length;
+  const buildRes = faHasLines ? resFa : (enHasLines ? resEn : resFa);
+  const built = buildLineBoxesFromTesseractResult(buildRes);
+  lineBoxes = built.boxes;
+  lineTextsById = built.textsById;
+} else {
         const rotBlob = await makeRotatedFullBlob();
         const res = await ocrBlob(rotBlob, lang);
         output.value = (res?.data?.text || "").replace(/\r\n/g, "\n");
@@ -799,14 +816,33 @@
     }
   };
 
-  saveBtn.onclick = () => {
-    const blob = new Blob([output.value], { type: "text/plain;charset=utf-8" });
+saveBtn.onclick = () => {
+  const lang = langSel.value;
+
+  // helper
+  function downloadText(filename, text) {
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "ocr.txt";
+    a.download = filename;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 500);
-  };
+  }
+
+  if (lang === "fas+eng") {
+    // خروجی با [FA]/[EN] ساخته شده، برش با regex
+    const faMatch = output.value.match(/\[FA\]\s*\n([\s\S]*?)(?:\n\[EN\]|\s*$)/i);
+    const enMatch = output.value.match(/\[EN\]\s*\n([\s\S]*?)(?:\s*$)/i);
+
+    const faText = (faMatch?.[1] ?? "").trimEnd();
+    const enText = (enMatch?.[1] ?? "").trimEnd();
+
+    downloadText("fa.txt", faText);
+    downloadText("en.txt", enText);
+  } else {
+    downloadText("ocr.txt", output.value);
+  }
+};
 
   rotApplyBtn.onclick = () => {
     const v = Number(rotDegInput.value);
