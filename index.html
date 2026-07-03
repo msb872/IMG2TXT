@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>OCR + Crop (Rotate + Line OCR)</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+<style>
+  /* ... همان استایل های قبلی ... */
+  * { margin: 0; padding: 0; box-sizing: border-box; font-family: tahoma; }
+
+  body{ background:#f4f4f4; color:#222; padding:20px; overflow-y: scroll; overflow-x: hidden; }
+  body.dark{ background:#181818; color:#eee; }
+
+  .container{ max-width:1100px; margin:auto; min-height:100vh; padding-top: 6px; overflow: visible !important; }
+  h1{ text-align:center; margin-bottom:16px; }
+
+  .toolbar{
+    display:flex; flex-wrap:wrap; gap:10px;
+    justify-content:center; align-items:center;
+    margin-bottom:14px;
+    position: sticky;
+    top: 0;
+    z-index: 999999;
+    background: rgba(244,244,244,0.98);
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(0,0,0,.06);
+  }
+  body.dark .toolbar{
+    background: rgba(24,24,24,0.98);
+    border-bottom: 1px solid rgba(255,255,255,.10);
+  }
+  .toolbar * { position: relative; z-index: 1; }
+
+  button{
+    padding:10px 18px;
+    border:none;
+    border-radius:8px;
+    cursor:pointer;
+    background:#1976d2;
+    color:#fff;
+    font-size:15px;
+    flex: 0 0 auto;
+    position: relative;
+    z-index: 1;
+  }
+  button:disabled{ opacity:.6; cursor:not-allowed; }
+
+  label.file{
+    padding:10px 18px;
+    background:#009688;
+    color:#fff;
+    border-radius:8px;
+    cursor:pointer;
+    flex: 0 0 auto;
+    user-select:none;
+    position: relative;
+    z-index: 1;
+  }
+  input[type=file]{ display:none; }
+
+  select, input[type=range], input[type=number]{
+    padding:10px 12px;
+    border-radius:8px;
+    border:1px solid #ccc;
+    background:#fff;
+    flex: 0 0 auto;
+    position: relative;
+    z-index: 1;
+  }
+  body.dark select, body.dark input[type=number]{ background:#222; color:#eee; border-color:#444; }
+
+  #dropZone{
+    height:150px;
+    border:3px dashed #999;
+    border-radius:15px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:18px;
+    background:#fff;
+    text-align:center;
+    margin-bottom:10px;
+    position: relative;
+    z-index: 1;
+  }
+  #dropZone.drag{ border-color:#2196f3; background:#e3f2fd; }
+
+  canvas#stageCanvas{
+    width:min(100%, 900px);
+    height:auto;
+    display:block;
+    margin:10px auto;
+    border-radius:10px;
+    box-shadow:0 0 10px rgba(0,0,0,.2);
+    background:#fff;
+    touch-action:none;
+    user-select:none;
+    cursor:crosshair;
+    position: relative;
+    z-index: 1;
+  }
+
+  .hint{ font-size:13px; opacity:.85; margin:6px 0 10px; text-align:center; }
+
+  .tog{
+    display:flex; gap:12px; flex-wrap:wrap;
+    align-items:center; justify-content:center;
+    margin:8px 0 8px;
+    position: relative;
+    z-index: 1;
+  }
+  .tog label{ font-size:14px; }
+
+  .progress{ margin-top:10px; position: relative; z-index: 1; }
+  progress{ width:100%; height:20px; }
+  #status{ margin-top:8px; font-size:14px; position: relative; z-index: 1; }
+
+  textarea{
+    width:100%; height:250px; resize:vertical;
+    padding:10px; font-size:15px;
+    border-radius:10px;
+    direction: rtl;
+    unicode-bidi: plaintext;
+    margin-top:10px;
+    position: relative;
+    z-index: 1;
+    background:#fff; color:#222;
+  }
+  body.dark textarea{ background:#222; color:#fff; }
+
+  .row{
+    display:flex; gap:20px;
+    flex-wrap:wrap;
+    margin-top:10px; font-size:14px;
+    justify-content:center;
+    position: relative;
+    z-index: 1;
+  }
+
+  .lineBox{
+    width:100%;
+    margin-top:12px;
+    padding:10px;
+    border-radius:10px;
+    background:#fff;
+    box-shadow:0 0 0 1px rgba(0,0,0,.06);
+  }
+  body.dark .lineBox{
+    background:#1f1f1f;
+    box-shadow:0 0 0 1px rgba(255,255,255,.08);
+  }
+  .lineBox h3{ font-size:14px; margin-bottom:6px; opacity:.9; }
+  .lineBox .content{
+    white-space:pre-wrap;
+    word-break:break-word;
+    font-size:15px;
+    min-height:46px;
+  }
+
+  /* تصویر debug کراپ */
+  #debugCropImg {
+    display: block;
+    margin: 12px auto;
+    max-width: 320px;
+    border: 1px solid #aaa;
+    border-radius: 6px;
+  }
+</style>
+</head>
+
+<body>
+<div class="container">
+  <h1>OCR + Crop (Rotate + Line OCR)</h1>
+
+  <div class="toolbar">
+    <label class="file">
+      انتخاب تصویر
+      <input type="file" id="file" accept="image/*" multiple>
+    </label>
+
+    <select id="langSel">
+      <option value="fas" selected>fas (فقط فارسی)</option>
+      <option value="fas+eng">fas + eng</option>
+      <option value="eng">eng (فقط انگلیسی)</option>
+    </select>
+
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <label style="display:flex; gap:8px; align-items:center;">
+        Rotate (0..360):
+        <input id="rotDeg" type="number" min="0" max="360" step="0.1" value="0" style="width:110px;">
+      </label>
+      <button id="rotApplyBtn">اعمال</button>
+      <button id="rotResetBtn">ریست</button>
+    </div>
+
+    <button id="ocrBtn">OCR کل تصویر</button>
+    <button id="cropOcrBtn" disabled>OCR از Crop</button>
+    <button id="clearCropBtn" disabled>پاک کردن Crop</button>
+
+    <button id="copyBtn" disabled>کپی</button>
+    <button id="saveBtn" disabled>دانلود TXT</button>
+    <button id="darkBtn">حالت تاریک</button>
+  </div>
+
+  <div id="dropZone">تصویر را اینجا رها کنید<br>یا<br>Ctrl+V</div>
+  <div class="hint">
+    Crop: کلیک داخل تصویر و Drag برای انتخاب ناحیه.
+    برای OCR از Crop فقط همان ناحیه است (با Rotate اعمال‌شده).
+    برای Line OCR بعد از OCR کل تصویر، روی خط‌ها کلیک کن.
+  </div>
+
+  <div class="tog">
+    <label>
+      <input type="checkbox" id="usePreprocess" checked />
+      پیش‌پردازش (پیشنهادی)
+    </label>
+
+    <label style="display:flex; gap:10px; align-items:center;">
+      آستانه باینری:
+      <input id="thr" type="range" min="90" max="220" value="145" />
+      <span id="thrVal" style="min-width:48px; display:inline-block;">145</span>
+    </label>
+
+    <label style="display:flex; gap:10px; align-items:center;">
+      PSM:
+      <select id="psm">
+        <option value="6" selected>6</option>
+        <option value="3">3</option>
+        <option value="4">4</option>
+        <option value="11">11</option>
+      </select>
+    </label>
+  </div>
+
+  <canvas id="stageCanvas"></canvas>
+
+  <div class="progress">
+    <progress id="progress" value="0" max="100"></progress>
+    <div id="status">آماده</div>
+  </div>
+
+  <textarea id="output" placeholder="متن استخراج شده..." dir="rtl" lang="fa"></textarea>
+
+  <div class="lineBox">
+    <h3>OCR Line (کلیک روی خط)</h3>
+    <div id="lineOutput" class="content">—</div>
+  </div>
+
+  <div class="row">
+    <div>کلمات: <span id="words">0</span></div>
+    <div>خطوط: <span id="lines">0</span></div>
+    <div>کاراکتر: <span id="chars">0</span></div>
+  </div>
+
+  <!-- تصویر برای نمایش نتیجه crop (اختیاری برای دیباگ) -->
+  <img id="debugCropImg" alt="Crop Debug Image" style="display:none;" />
+</div>
+
+<script>
+  const fileInput = document.getElementById("file");
+  const dropZone = document.getElementById("dropZone");
+
+  const canvas = document.getElementById("stageCanvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+  const output = document.getElementById("output");
+  const lineOutput = document.getElementById("lineOutput");
+
+  const progress = document.getElementById("progress");
+  const statusEl = document.getElementById("status");
+
+  const ocrBtn = document.getElementById("ocrBtn");
+  const cropOcrBtn = document.getElementById("cropOcrBtn");
+  const clearCropBtn = document.getElementById("clearCropBtn");
+
+  const copyBtn = document.getElementById("copyBtn");
+  const saveBtn = document.getElementById("saveBtn");
+  const darkBtn = document.getElementById("darkBtn");
+
+  const langSel = document.getElementById("langSel");
+  const usePreprocess = document.getElementById("usePreprocess");
+  const thr = document.getElementById("thr");
+  const thrVal = document.getElementById("thrVal");
+  const psmSel = document.getElementById("psm");
+
+  const rotDegInput = document.getElementById("rotDeg");
+  const rotApplyBtn = document.getElementById("rotApplyBtn");
+  const rotResetBtn = document.getElementById("rotResetBtn");
+
+  const wordsEl = document.getElementById("words");
+  const linesEl = document.getElementById("lines");
+  const charsEl = document.getElementById("chars");
+
+  const debugCropImg = document.getElementById("debugCropImg");
+
+  thr.addEventListener("input", () => thrVal.textContent = thr.value);
+
+  let currentImage = null;
+  let currentImageFile = null;
+  let hasImage = false;
+
+  // crop on displayed canvas coords (unrotated display)
+  let cropRect = null;
+  let isDragging = false;
+  let dragStart = null;
+
+  let currentRotateDeg = 0; // applied angle for OCR/crop
+  let lineBoxes = []; // {x,y,w,h,id,text}
+  let lineTextsById = new Map();
+
+  function setCounts(text) {
+    const t = text ?? "";
+    charsEl.innerText = t.length;
+    const trimmed = t.trim();
+    wordsEl.innerText = trimmed === "" ? 0 : trimmed.split(/\s+/).length;
+    linesEl.innerText = trimmed === "" ? 0 : t.split("\n").length;
+  }
+
+  function enableOutputButtons() {
+    const hasText = output.value.trim().length > 0;
+    copyBtn.disabled = !hasText;
+    saveBtn.disabled = !hasText;
+  }
+
+  output.addEventListener("input", () => {
+    setCounts(output.value);
+    enableOutputButtons();
+  });
+
+  function setBusyUI(busy) {
+    ocrBtn.disabled = !!busy;
+    cropOcrBtn.disabled = !!busy || !cropRect;
+    clearCropBtn.disabled = !!busy || !cropRect;
+    copyBtn.disabled = !!busy;
+    saveBtn.disabled = !!busy;
+  }
+
+  function resizeCanvasForImage(img) {
+    const maxW = 900;
+    const scale = Math.min(1, maxW / img.naturalWidth);
+    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+    canvas.width = w;
+    canvas.height = h;
+  }
+
+  function normalizeRect(r) {
+    const x = Math.min(r.x, r.x + r.w);
+    const y = Math.min(r.y, r.y + r.h);
+    const w = Math.abs(r.w);
+    const h = Math.abs(r.h);
+    return { x, y, w, h };
+  }
+
+  function pointFromEvent(e) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    return {
+      x: Math.max(0, Math.min(canvas.width, x)),
+      y: Math.max(0, Math.min(canvas.height, y))
+    };
+  }
+
+  function degToRad(d) { return d * Math.PI / 180; }
+
+  function makeRotatedCanvasFromImage(img, angleDeg) {
+    const angleRad = degToRad(angleDeg);
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+
+    const cos = Math.abs(Math.cos(angleRad));
+    const sin = Math.abs(Math.sin(angleRad));
+    const outW = Math.max(1, Math.round(w * cos + h * sin));
+    const outH = Math.max(1, Math.round(w * sin + h * cos));
+
+    const c = document.createElement("canvas");
+    c.width = outW;
+    c.height = outH;
+
+    const cctx = c.getContext("2d");
+    cctx.translate(outW / 2, outH / 2);
+    cctx.rotate(angleRad);
+    cctx.drawImage(img, -w / 2, -h / 2);
+
+    return { canvas: c, outW, outH, inW: w, inH: h, angleRad };
+  }
+
+  // map rect in natural (unrotated) -> rotated canvas bbox
+  function mapNaturalRectToRotatedBBox(rect, angleDeg, inW, inH, outW, outH) {
+    const angleRad = degToRad(angleDeg);
+    const cxIn = inW / 2, cyIn = inH / 2;
+    const cxOut = outW / 2, cyOut = outH / 2;
+
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+
+    const corners = [
+      { x: rect.x, y: rect.y },
+      { x: rect.x + rect.w, y: rect.y },
+      { x: rect.x + rect.w, y: rect.y + rect.h },
+      { x: rect.x, y: rect.y + rect.h }
+    ];
+
+    const rot = corners.map(p => {
+      const x = p.x - cxIn;
+      const y = p.y - cyIn;
+      const xr = x * cos - y * sin;
+      const yr = x * sin + y * cos;
+      return { x: xr + cxOut, y: yr + cyOut };
+    });
+
+    const xs = rot.map(p => p.x);
+    const ys = rot.map(p => p.y);
+    return normalizeRect({ x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) });
+  }
+
+  function redraw() {
+    if (!currentImage) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(currentImage, 0, 0, canvas.width, canvas.height);
+
+    // crop overlay
+    if (cropRect) {
+      const r = normalizeRect(cropRect);
+      if (r.w > 6 && r.h > 6) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(33,150,243,0.95)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+        ctx.fillStyle = "rgba(33,150,243,0.12)";
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+        ctx.restore();
+      }
+    }
+
+    // line boxes overlay
+    if (lineBoxes?.length) {
+      ctx.save();
+      for (const b of lineBoxes) {
+        ctx.strokeStyle = "rgba(76,175,80,0.95)";
+        ctx.fillStyle = "rgba(76,175,80,0.10)";
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 2;
+        ctx.strokeRect(b.x, b.y, b.w, b.h);
+        ctx.fillRect(b.x, b.y, b.w, b.h);
+
+        ctx.setLineDash([]);
+        ctx.fillStyle = "rgba(76,175,80,0.75)";
+        ctx.font = "12px tahoma";
+        ctx.fillText(String(b.id), b.x + 4, Math.min(canvas.height - 4, b.y + 14));
+      }
+      ctx.restore();
+    }
+  }
+
+  function setCropRectFromDrag(start, end) {
+    cropRect = { x: start.x, y: start.y, w: end.x - start.x, h: end.y - start.y };
+    const n = normalizeRect(cropRect);
+    const ok = n.w > 8 && n.h > 8;
+    cropOcrBtn.disabled = !ok;
+    clearCropBtn.disabled = !ok;
+    redraw();
+  }
+
+  canvas.addEventListener("mousedown", (e) => {
+    if (!hasImage || e.button !== 0) return;
+    isDragging = true;
+    dragStart = pointFromEvent(e);
+    cropRect = { x: dragStart.x, y: dragStart.y, w: 0, h: 0 };
+    cropOcrBtn.disabled = true;
+    clearCropBtn.disabled = true;
+    redraw();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!isDragging) return;
+    setCropRectFromDrag(dragStart, pointFromEvent(e));
+  });
+  window.addEventListener("mouseup", () => {
+    if (!isDragging) return;
+    isDragging = false;
+    if (!cropRect) return;
+    const n = normalizeRect(cropRect);
+    const ok = n.w > 8 && n.h > 8;
+    cropOcrBtn.disabled = !ok;
+    clearCropBtn.disabled = !ok;
+  });
+
+  function clearCrop() {
+    cropRect = null;
+    cropOcrBtn.disabled = true;
+    clearCropBtn.disabled = true;
+    redraw();
+    debugCropImg.style.display = "none";
+  }
+  clearCropBtn.onclick = clearCrop;
+
+  // --------- OCR helpers ----------
+  async function preprocessImageDataToBlob(blob) {
+    if (!usePreprocess.checked) return blob;
+
+    const threshold = Number(thr.value);
+    const contrast = 1.25;
+
+    return await new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(blob);
+
+      img.onload = () => {
+        try {
+          const maxSide = 1800;
+          const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+          const w = Math.max(1, Math.round(img.naturalWidth * scale));
+          const h = Math.max(1, Math.round(img.naturalHeight * scale));
+
+          const c = document.createElement("canvas");
+          c.width = w;
+          c.height = h;
+          const cctx = c.getContext("2d", { willReadFrequently: true });
+          cctx.drawImage(img, 0, 0, w, h);
+
+          const imageData = cctx.getImageData(0, 0, w, h);
+          const d = imageData.data;
+
+          for (let i = 0; i < d.length; i += 4) {
+            const r = d[i], g = d[i + 1], b = d[i + 2];
+            let gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            gray = (gray - 128) * contrast + 128;
+            gray = Math.max(0, Math.min(255, gray));
+            const bw = gray > threshold ? 255 : 0;
+            d[i] = d[i + 1] = d[i + 2] = bw;
+          }
+          cctx.putImageData(imageData, 0, 0);
+
+          c.toBlob(b => {
+            if (!b) return reject(new Error("Preprocess blob null"));
+            resolve(b);
+          }, "image/png");
+        } catch (err) { reject(err); }
+        finally { setTimeout(() => URL.revokeObjectURL(url), 0); }
+      };
+
+      img.onerror = (e) => { setTimeout(() => URL.revokeObjectURL(url), 0); reject(e); };
+      img.src = url;
+    });
+  }
+
+  async function ocrBlob(blob, lang) {
+    const pre = await preprocessImageDataToBlob(blob);
+
+    const res = await Tesseract.recognize(pre, lang, {
+      logger: (m) => {
+        if (m.status) statusEl.innerText = m.status;
+        if (typeof m.progress === "number") progress.value = Math.round(m.progress * 100);
+      },
+      tessedit_pageseg_mode: Number(psmSel.value)
+    });
+    return res;
+  }
+
+  async function makeRotatedFullBlob() {
+    const rot = makeRotatedCanvasFromImage(currentImage, currentRotateDeg);
+    return await new Promise((resolve, reject) => {
+      rot.canvas.toBlob(b => {
+        if (!b) return reject(new Error("Full blob null"));
+        resolve(b);
+      }, "image/png");
+    });
+  }
+
+  async function makeRotatedCroppedBlob() {
+    const n = cropRect ? normalizeRect(cropRect) : null;
+    if (!n || n.w < 8 || n.h < 8) return null;
+
+    const naturalW = currentImage.naturalWidth;
+    const naturalH = currentImage.naturalHeight;
+
+    const scaleX = naturalW / canvas.width;
+    const scaleY = naturalH / canvas.height;
+
+    // تبدیل ناحیه Crop به ابعاد طبیعی (natural)
+    const rectInNatural = {
+      x: Math.min(n.x * scaleX, naturalW),
+      y: Math.min(n.y * scaleY, naturalH),
+      w: Math.min(n.w * scaleX, naturalW),
+      h: Math.min(n.h * scaleY, naturalH)
+    };
+
+    const rot = makeRotatedCanvasFromImage(currentImage, currentRotateDeg);
+
+    // نقشه bbox کرپ به مختصات تصویر چرخیده
+    const rotBBox = mapNaturalRectToRotatedBBox(rectInNatural, currentRotateDeg, naturalW, naturalH, rot.outW, rot.outH);
+
+    // Clip مختصات به درون تصویر چرخیده
+    const sx = Math.max(0, Math.min(rot.outW - 1, rotBBox.x));
+    const sy = Math.max(0, Math.min(rot.outH - 1, rotBBox.y));
+    const sw = Math.max(1, Math.min(rot.outW - sx, rotBBox.w));
+    const sh = Math.max(1, Math.min(rot.outH - sy, rotBBox.h));
+
+    const c = document.createElement("canvas");
+    c.width = sw;
+    c.height = sh;
+    const cctx = c.getContext("2d");
+    cctx.drawImage(rot.canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+
+    // نمایش تصویر کراپ شده برای دیباگ (اختیاری)
+    c.toBlob(blob => {
+      if (blob) {
+        debugCropImg.style.display = "block";
+        debugCropImg.src = URL.createObjectURL(blob);
+      } else {
+        debugCropImg.style.display = "none";
+        debugCropImg.src = "";
+      }
+    }, "image/png");
+
+    return await new Promise((resolve, reject) => {
+      c.toBlob(b => {
+        if (!b) return reject(new Error("Crop blob null"));
+        resolve(b);
+      }, "image/png");
+    });
+  }
+
+  function mergeTexts(faText, enText) {
+    const faLines = (faText || "").split("\n");
+    const enLines = (enText || "").split("\n");
+    if (!faText.trim()) return enText || "";
+    if (!enText.trim()) return faText || "";
+
+    const out = [];
+    const seen = new Set();
+    for (const l of faLines.concat(enLines)) {
+      const line = (l ?? "").trim();
+      if (!line) continue;
+      const key = line.replace(/\s+/g, " ");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(line);
+    }
+    return out.join("\n");
+  }
+
+  function buildLineBoxesFromTesseractResult(result) {
+    const data = result?.data || {};
+    const words = data.words || [];
+    const lines = data.lines || null;
+
+    const imgW = data.imageWidth ?? data?.image?.width;
+    const imgH = data.imageHeight ?? data?.image?.height;
+
+    if (!imgW || !imgH) {
+      return { boxes: [], textsById: new Map() };
+    }
+
+    const sx = canvas.width / imgW;
+    const sy = canvas.height / imgH;
+
+    const boxes = [];
+    const textsById = new Map();
+
+    let lineItems = [];
+    if (Array.isArray(lines) && lines.length) {
+      for (let i = 0; i < lines.length; i++) {
+        const L = lines[i];
+        const box = L.bbox || L.box || L;
+        const x0 = box.x0 ?? box.x ?? box.left ?? 0;
+        const y0 = box.y0 ?? box.y ?? box.top ?? 0;
+        const w = (box.x1 != null && box.x0 != null) ? (box.x1 - box.x0) : (box.w ?? box.width ?? 0);
+        const h = (box.y1 != null && box.y0 != null) ? (box.y1 - box.y0) : (box.h ?? box.height ?? 0);
+        if (w < 10 || h < 8) continue;
+
+        const id = boxes.length + 1;
+        const x = Math.max(0, Math.round(x0 * sx));
+        const y = Math.max(0, Math.round(y0 * sy));
+        const ww = Math.max(1, Math.round(w * sx));
+        const hh = Math.max(1, Math.round(h * sy));
+
+        const text = (L.text ?? "").toString();
+        boxes.push({ x, y, w: ww, h: hh, id });
+        textsById.set(id, text.trim());
+      }
+    } else {
+      // fallback: cluster words by y
+      const sorted = (words || []).filter(w => w?.bbox).map(w => {
+        const b = w.bbox;
+        const x0 = b.x0 ?? b.x ?? b.left ?? 0;
+        const y0 = b.y0 ?? b.y ?? b.top ?? 0;
+        const ww = (b.x1 != null && b.x0 != null) ? (b.x1 - b.x0) : (b.w ?? b.width ?? 0);
+        const hh = (b.y1 != null && b.y0 != null) ? (b.y1 - b.y0) : (b.h ?? b.height ?? 0);
+        return { x0, y0, w: ww, h: hh, text: w.text ?? "" };
+      }).sort((a, b) => a.y0 - b.y0);
+
+      const clusters = [];
+      for (const wd of sorted) {
+        const yc = wd.y0 + wd.h / 2;
+        let placed = false;
+        for (const c of clusters) {
+          if (Math.abs(yc - c.yc) < 18) {
+            c.words.push(wd);
+            c.yc = (c.yc * (c.words.length - 1) + yc) / c.words.length;
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) clusters.push({ yc, words: [wd] });
+      }
+
+      for (const c of clusters) {
+        const ws = c.words;
+        const minX = Math.min(...ws.map(z => z.x0));
+        const minY = Math.min(...ws.map(z => z.y0));
+        const maxX = Math.max(...ws.map(z => z.x0 + z.w));
+        const maxY = Math.max(...ws.map(z => z.y0 + z.h));
+
+        const w = maxX - minX;
+        const h = maxY - minY;
+        if (w < 10 || h < 8) continue;
+
+        const id = boxes.length + 1;
+        const x = Math.max(0, Math.round(minX * sx));
+        const y = Math.max(0, Math.round(minY * sy));
+        const ww = Math.max(1, Math.round(w * sx));
+        const hh = Math.max(1, Math.round(h * sy));
+
+        const text = ws.map(z => z.text).join(" ").trim();
+        boxes.push({ x, y, w: ww, h: hh, id });
+        textsById.set(id, text);
+      }
+    }
+
+    return { boxes, textsById };
+  }
+
+  // Click on line boxes -> show stored line text
+  canvas.addEventListener("click", (e) => {
+    if (!lineBoxes?.length) return;
+    const p = pointFromEvent(e);
+    const hit = lineBoxes.find(b => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h);
+    if (!hit) return;
+
+    const t = lineTextsById.get(hit.id) ?? "";
+    lineOutput.textContent = t && t.trim() ? t : "—";
+  });
+
+  // --------- Actions ----------
+  async function doOCRFull() {
+    if (!currentImage || !currentImageFile) return;
+
+    setBusyUI(true);
+    lineOutput.textContent = "—";
+    lineBoxes = [];
+    lineTextsById = new Map();
+    redraw();
+
+    progress.value = 0;
+    statusEl.innerText = "در حال OCR...";
+
+    try {
+      const lang = langSel.value;
+      if (lang === "fas+eng") {
+        const rotBlob = await makeRotatedFullBlob();
+        const resFa = await ocrBlob(rotBlob, "fas");
+        const resEn = await ocrBlob(rotBlob, "eng");
+        const faText = (resFa?.data?.text || "").replace(/\r\n/g, "\n");
+        const enText = (resEn?.data?.text || "").replace(/\r\n/g, "\n");
+        output.value = mergeTexts(faText, enText);
+
+        // build line boxes from english or fa? Use the one that has line structure (prefer fa)
+        const buildRes = resFa?.data?.lines ? resFa : resEn;
+        const built = buildLineBoxesFromTesseractResult(buildRes);
+        lineBoxes = built.boxes;
+        lineTextsById = built.textsById;
+
+      } else {
+        const rotBlob = await makeRotatedFullBlob();
+        const res = await ocrBlob(rotBlob, lang);
+        output.value = (res?.data?.text || "").replace(/\r\n/g, "\n");
+
+        const built = buildLineBoxesFromTesseractResult(res);
+        lineBoxes = built.boxes;
+        lineTextsById = built.textsById;
+      }
+
+      setCounts(output.value);
+      enableOutputButtons();
+
+      statusEl.innerText = "تمام شد";
+      redraw();
+    } catch (err) {
+      console.error(err);
+      statusEl.innerText = "خطا در OCR";
+      alert("خطا در OCR. جزئیات را در کنسول ببینید.");
+    } finally {
+      setBusyUI(false);
+      progress.value = 100;
+    }
+  }
+
+  async function doOCRCrop() {
+    if (!currentImageFile || !currentImage || !cropRect) return;
+
+    setBusyUI(true);
+    progress.value = 0;
+    statusEl.innerText = "در حال OCR از Crop...";
+
+    try {
+      const lang = langSel.value;
+      const cropBlob = await makeRotatedCroppedBlob();
+      if (!cropBlob) throw new Error("Crop blob null");
+
+      if (lang === "fas+eng") {
+        const [resFa, resEn] = await Promise.all([
+          ocrBlob(cropBlob, "fas"),
+          ocrBlob(cropBlob, "eng")
+        ]);
+        const faText = (resFa?.data?.text || "").replace(/\r\n/g, "\n");
+        const enText = (resEn?.data?.text || "").replace(/\r\n/g, "\n");
+        output.value = mergeTexts(faText, enText);
+      } else {
+        const res = await ocrBlob(cropBlob, lang);
+        output.value = (res?.data?.text || "").replace(/\r\n/g, "\n");
+      }
+
+      setCounts(output.value);
+      enableOutputButtons();
+      statusEl.innerText = "تمام شد";
+    } catch (err) {
+      console.error(err);
+      statusEl.innerText = "خطا در OCR از Crop";
+      alert("خطا در OCR از Crop. جزئیات در کنسول.");
+    } finally {
+      setBusyUI(false);
+      progress.value = 100;
+    }
+  }
+
+  ocrBtn.onclick = doOCRFull;
+  cropOcrBtn.onclick = doOCRCrop;
+
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(output.value);
+      statusEl.innerText = "کپی شد";
+    } catch {
+      alert("کپی نشد. مرورگر اجازه نداد.");
+    }
+  };
+
+  saveBtn.onclick = () => {
+    const blob = new Blob([output.value], { type: "text/plain;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "ocr.txt";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 500);
+  };
+
+  rotApplyBtn.onclick = () => {
+    const v = Number(rotDegInput.value);
+    if (Number.isFinite(v)) currentRotateDeg = ((v % 360) + 360) % 360;
+    statusEl.innerText = "Rotate اعمال شد (برای OCR)";
+  };
+  rotResetBtn.onclick = () => {
+    rotDegInput.value = 0;
+    currentRotateDeg = 0;
+    statusEl.innerText = "Rotate ریست شد (برای OCR)";
+  };
+
+  // Load file
+  function resetState() {
+    cropRect = null;
+    lineBoxes = [];
+    lineTextsById = new Map();
+    hasImage = false;
+    currentImage = null;
+    redraw();
+    output.value = "";
+    lineOutput.textContent = "—";
+    setCounts("");
+    enableOutputButtons();
+    cropOcrBtn.disabled = true;
+    clearCropBtn.disabled = true;
+    debugCropImg.style.display = "none";
+    debugCropImg.src = "";
+  }
+
+  function loadFile(file) {
+    resetState();
+    currentImageFile = file;
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+
+    img.onload = () => {
+      hasImage = true;
+      currentImage = img;
+      resizeCanvasForImage(img);
+      redraw();
+
+      statusEl.innerText = "آماده";
+      currentRotateDeg = 0;
+      rotDegInput.value = 0;
+
+      lineBoxes = [];
+      lineTextsById = new Map();
+      redraw();
+
+      enableOutputButtons();
+    };
+
+    img.onerror = () => {
+      hasImage = false;
+      currentImage = null;
+      statusEl.innerText = "خطا در لود تصویر";
+    };
+
+    img.src = url;
+
+    // revoke object URL later
+    img.onloadend = () => {
+      try { URL.revokeObjectURL(url); } catch { }
+    };
+  }
+
+  fileInput.onchange = () => {
+    const f = fileInput.files?.[0];
+    if (f) loadFile(f);
+  };
+
+  // Drag drop
+  dropZone.ondragover = (e) => {
+    e.preventDefault();
+    dropZone.classList.add("drag");
+  };
+  dropZone.ondragleave = () => {
+    dropZone.classList.remove("drag");
+  };
+  dropZone.ondrop = (e) => {
+    e.preventDefault();
+    dropZone.classList.remove("drag");
+    const f = e.dataTransfer.files?.[0];
+    if (f) loadFile(f);
+  };
+
+  // Paste
+  document.addEventListener("paste", (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.type && it.type.startsWith("image/")) {
+        const f = it.getAsFile();
+        if (f) loadFile(f);
+        break;
+      }
+    }
+  });
+
+  darkBtn.onclick = () => document.body.classList.toggle("dark");
+
+  // Initial UI update
+  enableOutputButtons();
+  setCounts("");
+
+  // Initial redraw (empty)
+  redraw();
+</script>
+</body>
+</html>
